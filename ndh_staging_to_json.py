@@ -33,6 +33,7 @@ import fhirclient.r4models.fhirreference as ref
 import fhirclient.r4models.humanname as hn
 import fhirclient.r4models.address as add
 import fhirclient.r4models.contactpoint as cp
+import fhirclient.r4models.identifier as Identifier
 import fhirclient.r4models.identifier as id
 import fhirclient.r4models.extension as ext
 import fhirclient.r4models.codeableconcept as CC
@@ -49,6 +50,8 @@ import display_values
 URL_NDH_IDENTIFIER_STATUS = 'http://hl7.org/fhir/us/ndh/StructureDefinition/base-ext-identifier-status'
 URL_GEOLOCATION = 'http://hl7.org/fhir/StructureDefinition/geolocation'
 URL_NEWPATIENTS = 'http://hl7.org/fhir/us/ndh/StructureDefinition/base-ext-newpatients'
+URL_VERIFICATIONSTATUS = 'http://hl7.org/fhir/us/ndh/StructureDefinition/base-ext-verification-status'
+URL_IDENTIFIERSTATUS = 'http://hl7.org/fhir/us/ndh/StructureDefinition/base-ext-identifier-status'
 
 ENDPOINT_TYPE_CS_DICT = {"direct-project": "http://terminology.hl7.org/CodeSystem/endpoint-connection-type",
                       "hl7-fhir-rest": "http://terminology.hl7.org/CodeSystem/endpoint-connection-type",
@@ -132,23 +135,47 @@ def main():
     
     if(processLocations):
         f = open(os.path.join(dir_path, loc_filename), "w")
-        
-        location_cur.execute('SELECT * FROM Location')
+        sql = "SELECT l.*, o.name from Location as l INNER JOIN Entity_Location as el ON l.id = el.location_id INNER JOIN Organization as o ON o.id = el.entity_id UNION SELECT l.*, (p.last_name || ', ' || p.first_name) from Location as l INNER JOIN Entity_Location as el ON l.id = el.location_id INNER JOIN Practitioner as p ON p.id = el.entity_id GROUP BY l.id ORDER BY name;"
+        location_cur.execute(sql)
+        prev_name = ""
+        cur_name_index = 1
         for row in location_cur:
             currentLocItem = currentLocItem + 1
 
             location = Location.Location()
             extensions = []
-            location.meta = Meta.Meta(jsondict=loads('{"lastUpdated": "' + lastUpdated + '", "profile" : [ "http://hl7.org/fhir/us/ndh/StructureDefinition/ndh-Location"]}'))
+            location.meta = Meta.Meta(jsondict=loads('{"lastUpdated": "' + lastUpdated + '", "profile" : [ "http://hl7.org/fhir/us/ndh/StructureDefinition/ndh-ndapi-Location"]}'))
             location.id = row['id']
+            location.identifier = [getFHIRIDAsBusinessID(row['id'], 'Location')]
+            identifier_status = ext.Extension()
+            identifier_status.url = URL_IDENTIFIERSTATUS
+            identifier_status.valueCode =  "active"
+            for ident in location.identifier:
+                ident.extension = [identifier_status]
             location.status = "active"
+            
+            location.name = row['name']
+            if(location.name == None):
+                location.name = "No Name"
+            if(location.name == prev_name):
+                cur_name_index = cur_name_index + 1
+            else:
+                prev_name = location.name
+                cur_name_index = 1
+            location.name = location.name + " - " + str(cur_name_index)
+
             location.address = getAddress(row)
 
-            geoLocation = getGeoLocation(row)
-            if(geoLocation != None):
-                extensions.append(geoLocation)
+            # NDH STU1 is planned to require verification status extension, default to not-required verification
+            verification_status = ext.Extension()
+            verification_status.url = URL_VERIFICATIONSTATUS
+            verification_status.valueCodeableConcept =  CC.CodeableConcept(jsondict=loads('{"coding" : [{"system" : "http://hl7.org/fhir/us/ndh/CodeSystem/NdhVerificationStatusCS", "code" : "not-required", "display" : "Not Required"}]}'))
+            extensions.append(verification_status)
 
-            
+            # no Geolocation in Location profile
+            #geoLocation = getGeoLocation(row)
+            #if(geoLocation != None):
+            #    extensions.append(geoLocation)
 
             
             # For new patients value, make a calculable and repeatable algorithm to identify a potential value. THis is a hash to a single digit which then can be mapped out to new patient VS values
@@ -190,9 +217,22 @@ def main():
             currentEPItem = currentEPItem + 1
             endpoint = Endpoint.Endpoint()
             extensions = []
-            endpoint.meta = Meta.Meta(jsondict=loads('{"lastUpdated": "' + lastUpdated + '", "profile" : [ "http://hl7.org/fhir/us/ndh/StructureDefinition/ndh-Endpoint"]}'))
+            endpoint.meta = Meta.Meta(jsondict=loads('{"lastUpdated": "' + lastUpdated + '", "profile" : [ "http://hl7.org/fhir/us/ndh/StructureDefinition/ndh-ndapi-Endpoint"]}'))
             endpoint.id = row['id']
+            endpoint.identifier = [getFHIRIDAsBusinessID(row['id'], 'Endpoint')]
+            identifier_status = ext.Extension()
+            identifier_status.url = URL_IDENTIFIERSTATUS
+            identifier_status.valueCode =  "active"
+            for ident in endpoint.identifier:
+                ident.extension = [identifier_status]
+            # NDH STU1 is planned to require verification status extension, default to not-required verification
+            verification_status = ext.Extension()
+            verification_status.url = URL_VERIFICATIONSTATUS
+            verification_status.valueCodeableConcept =  CC.CodeableConcept(jsondict=loads('{"coding" : [{"system" : "http://hl7.org/fhir/us/ndh/CodeSystem/NdhVerificationStatusCS", "code" : "not-required", "display" : "Not Required"}]}'))
+            extensions.append(verification_status)
+
             endpoint.status = "active"
+            
             if(('connection_type' in row) and (row['connection_type'] != None) and (row['connection_type'] != "")):
                 connectionType_code = coding.Coding()
                 connectionType_code.code = row['connection_type']
@@ -212,7 +252,8 @@ def main():
             if(('name' in row) and (row['name'] != None) and (row['name'] != "")):
                 endpoint.name = row['name']
             
-            endpoint.payloadType = [CC.CodeableConcept(jsondict=loads('{"coding" : [{"system" : "http://hl7.org/fhir/us/ndh/CodeSystem/EndpointPayloadTypeCS", "code" : "NA", "display" : "Not Applicable"}]}'))]
+            #endpoint.payloadType = [CC.CodeableConcept(jsondict=loads('{"coding" : [{"system" : "http://hl7.org/fhir/us/ndh/CodeSystem/EndpointPayloadTypeCS", "code" : "NA", "display" : "Not Applicable"}]}'))]
+            endpoint.payloadType = [CC.CodeableConcept(jsondict=loads('{"coding" : [{"system" : "http://terminology.hl7.org/CodeSystem/data-absent-reason", "code" : "not-applicable", "display" : "Not Applicable"}]}'))]
                     
             endpoint.address = row['url']
 
@@ -242,17 +283,30 @@ def main():
 
             organization = Organization.Organization()
             extensions = []
-            organization.meta = Meta.Meta(jsondict=loads('{"lastUpdated": "' + lastUpdated + '", "profile" : [ "http://hl7.org/fhir/us/ndh/StructureDefinition/ndh-Organization"]}'))
+            organization.meta = Meta.Meta(jsondict=loads('{"lastUpdated": "' + lastUpdated + '", "profile" : [ "http://hl7.org/fhir/us/ndh/StructureDefinition/ndh-ndapi-Organization"]}'))
             organization.id = row['id']
+            organization.identifier = [Identifier.Identifier(jsondict=loads('{"use": "official", "system": "http://hl7.org/fhir/sid/us-npi", "value": "' + row['npi'] + '"}')), getFHIRIDAsBusinessID(row['id'], 'Organization')]
+            # NDH STU1 is planned to require verification status extension, default to not-required verification
+            verification_status = ext.Extension()
+            verification_status.url = URL_VERIFICATIONSTATUS
+            verification_status.valueCodeableConcept =  CC.CodeableConcept(jsondict=loads('{"coding" : [{"system" : "http://hl7.org/fhir/us/ndh/CodeSystem/NdhVerificationStatusCS", "code" : "not-required", "display" : "Not Required"}]}'))
+            extensions.append(verification_status)
+
+            # TODO, CONFORMANCE VERIFY Identifier Status extension is required
             organization.identifier = [id.Identifier(jsondict=loads('{"use": "official", "system": "http://hl7.org/fhir/sid/us-npi", "value": "' + row['npi'] + '"}'))]
+            identifier_status = ext.Extension()
+            identifier_status.url = URL_IDENTIFIERSTATUS
+            identifier_status.valueCode =  "active"
+            for ident in organization.identifier:
+                ident.extension = [identifier_status]
             organization.active = True
             organization.type = [CC.CodeableConcept(jsondict=loads('{"coding" : [{"system" : "http://hl7.org/fhir/us/ndh/CodeSystem/OrgTypeCS", "code" : "prvgrp", "display": "Provider Group"}]}'))]
 
             organization.name = row['name']
             # Load address and phone number from Location using Entity_Location
             
-            
-            location_cur.execute('SELECT * from Location as l INNER JOIN Entity_Location as el ON l.id = el.location_id WHERE el.entity_id=? AND el.entity_type = 2;', (organization.id,))
+            # Added group by to get rid of duplicates. (Likely an issue with the importer to the db nppes_tostaging.py)
+            location_cur.execute('SELECT * from Location as l INNER JOIN Entity_Location as el ON l.id = el.location_id WHERE el.entity_id=? AND el.entity_type = 2 GROUP BY l.id;', (organization.id,))
             locations = location_cur.fetchall()
             #Get organization Locations
             addresses = []
@@ -313,9 +367,24 @@ def main():
 
             practitioner = Practitioner.Practitioner()
             extensions = []
-            practitioner.meta = Meta.Meta(jsondict=loads('{"lastUpdated": "' + lastUpdated + '", "profile" : [ "http://hl7.org/fhir/us/ndh/StructureDefinition/ndh-Practitioner"]}'))
+            practitioner.meta = Meta.Meta(jsondict=loads('{"lastUpdated": "' + lastUpdated + '", "profile" : [ "http://hl7.org/fhir/us/ndh/StructureDefinition/ndh-ndapi-Practitioner"]}'))
             practitioner.id = row['id']
-            practitioner.identifier = [id.Identifier(jsondict=loads('{"use": "official", "system": "http://hl7.org/fhir/sid/us-npi", "value": "' + row['npi'] + '"}'))]
+
+            # NDH STU1 is planned to require verification status extension, default to not-required verification
+            verification_status = ext.Extension()
+            verification_status.url = URL_VERIFICATIONSTATUS
+            verification_status.valueCodeableConcept =  CC.CodeableConcept(jsondict=loads('{"coding" : [{"system" : "http://hl7.org/fhir/us/ndh/CodeSystem/NdhVerificationStatusCS", "code" : "not-required", "display" : "Not Required"}]}'))
+            extensions.append(verification_status)
+
+            # TODO, CONFORMANCE VERIFY Identifier Status extension is required
+            practitioner.identifier = [id.Identifier(jsondict=loads('{"use": "official", "system": "http://hl7.org/fhir/sid/us-npi", "value": "' + row['npi'] + '"}')), Identifier.Identifier(jsondict=loads('{"use": "official", "system": "http://hl7.org/fhir/sid/us-npi", "value": "' + row['npi'] + '"}')), getFHIRIDAsBusinessID(row['id'], 'Practitioner')]
+            
+            identifier_status = ext.Extension()
+            identifier_status.url = URL_IDENTIFIERSTATUS
+            identifier_status.valueCode =  "active"
+            for ident in practitioner.identifier:
+                ident.extension = [identifier_status]
+
             practitioner.active = True
             #practitioner.type = [CC.CodeableConcept(jsondict=loads('{"coding" : [{"system" : "http://hl7.org/fhir/us/ndh/CodeSystem/OrgTypeCS", "code" : "prvgrp", "display": "Provider Group"}]}'))]
 
@@ -325,7 +394,7 @@ def main():
             
             location_cur.execute('SELECT * from Location as l INNER JOIN Entity_Location as el ON l.id = el.location_id WHERE el.entity_id=? AND el.entity_type = 1;', (practitioner.id,))
             locations = location_cur.fetchall()
-            #Get organization Locations
+            #Get practitioner Locations
             addresses = []
             for location in locations:
                 address = getAddress(location)
@@ -369,8 +438,20 @@ def main():
 
             practitionerrole = PractitionerRole.PractitionerRole()
             extensions = []
-            practitionerrole.meta = Meta.Meta(jsondict=loads('{"lastUpdated": "' + lastUpdated + '", "profile" : [ "http://hl7.org/fhir/us/ndh/StructureDefinition/ndh-PractitionerRole"]}'))
+            practitionerrole.meta = Meta.Meta(jsondict=loads('{"lastUpdated": "' + lastUpdated + '", "profile" : [ "http://hl7.org/fhir/us/ndh/StructureDefinition/ndh-ndapi-PractitionerRole"]}'))
             practitionerrole.id = row['id']
+            # Change to add FHIR ID as an identifier per CFRID-4
+            practitionerrole.identifier = [getFHIRIDAsBusinessID(row['id'], 'PractitionerRole')]
+            identifier_status = ext.Extension()
+            identifier_status.url = URL_IDENTIFIERSTATUS
+            identifier_status.valueCode =  "active"
+            for ident in practitionerrole.identifier:
+                ident.extension = [identifier_status]
+            # NDH STU1 is planned to require verification status extension, default to not-required verification
+            verification_status = ext.Extension()
+            verification_status.url = URL_VERIFICATIONSTATUS
+            verification_status.valueCodeableConcept =  CC.CodeableConcept(jsondict=loads('{"coding" : [{"system" : "http://hl7.org/fhir/us/ndh/CodeSystem/NdhVerificationStatusCS", "code" : "not-required", "display" : "Not Required"}]}'))
+            extensions.append(verification_status)
             
             practitionerrole.active = True
             # TODO Get practitioner and organization name for display
@@ -444,7 +525,14 @@ def main():
             outputBuffer = ""
         f.close()
         print("Wrote a total of", currentPractRolItem, "PractitionerRole records to", practrol_filename)
-    
+
+def getFHIRIDAsBusinessID(id, type):
+
+    identifier = Identifier.Identifier(jsondict=loads('{"system": "http://www.ndh.org/identifiers/' + type + '", "value": "' + id + '"}'))
+
+    return identifier    
+
+
 def getHumanNames(data):
     names = []
     if((('last_name' in data) and (data['last_name'] != None) and (data['last_name'] != "")) or (('alias_last_name' in data) and (data['alias_last_name'] != None) and (data['alias_last_name'] != ""))):

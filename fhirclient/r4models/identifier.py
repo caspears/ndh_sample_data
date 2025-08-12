@@ -4,7 +4,6 @@
 #  Generated from FHIR 3.6.0-bd605d07 (http://hl7.org/fhir/StructureDefinition/Identifier) on 2018-12-20.
 #  2018, SMART Health IT.
 
-
 from . import element
 
 class Identifier(element.Element):
@@ -24,6 +23,11 @@ class Identifier(element.Element):
         :param bool strict: If True (the default), invalid variables will raise a TypeError
         """
         
+        self.extension = None
+        
+        """ Additional content defined by implementations.
+        List of `Extension` items (represented as `dict` in JSON). """
+
         self.assigner = None
         
         """ Organization that issued id (may be just text).
@@ -71,6 +75,7 @@ class Identifier(element.Element):
     def elementProperties(self):
         js = super(Identifier, self).elementProperties()
         js.extend([
+            ("extension", "extension", extension.Extension, True, None, False),
             ("assigner", "assigner", fhirreference.FHIRReference, False, None, False),
             ("period", "period", period.Period, False, None, False),
             ("system", "system", str, False, None, False),
@@ -88,4 +93,4 @@ from . import codeableconcept
 from . import fhirreference
 from . import period
 from . import fhirprimitive
-
+from . import extension

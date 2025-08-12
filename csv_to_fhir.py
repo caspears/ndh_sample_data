@@ -1,4 +1,9 @@
 '''
+
+
+This is an older nppes to fhir converter that does not support identifying and creating between resources.
+The newer model of nppes to staging (database) and ndh staging to json should be used for a fuller and more maintained set of capabilities
+
 Coordinate information downloaded from https://simplemaps.com/data/us-cities
 Usage: python3 R4CapStatement_Maker.py [xlsx file]
 Dependecies: 
@@ -15,9 +20,7 @@ To install all dependencies: pip3 install -r requirements.txt
 to run on windows: python -m pip ...
 
 NOTE: this requires the r4models to be installed in the fhirclient pip site-package, to be installed in [installdir]/lib/python/site-packages/fhirclient
-Email Eric Haas for these models
 
-Modified from: https://github.com/Healthedata1/MyNotebooks/blob/master/CapStatement/R4CapStatement_Maker.ipynb
 '''
 import sys
 import os
