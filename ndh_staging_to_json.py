@@ -18,27 +18,28 @@ import os.path
 from os import path
 import argparse
 import sqlite3
+from shared.config import OUTPUT_DIR
+from shared.db import get_staging_connection
 
 from nameparser import HumanName
 #import random
 #import hashlib
 
-import fhirclient.r4models.organization as Organization
-import fhirclient.r4models.practitioner as Practitioner
-import fhirclient.r4models.practitionerrole as PractitionerRole
-import fhirclient.r4models.location as Location
-import fhirclient.r4models.endpoint as Endpoint
-import fhirclient.r4models.meta as Meta
-import fhirclient.r4models.fhirreference as ref
-import fhirclient.r4models.humanname as hn
-import fhirclient.r4models.address as add
-import fhirclient.r4models.contactpoint as cp
-import fhirclient.r4models.identifier as Identifier
-import fhirclient.r4models.identifier as id
-import fhirclient.r4models.extension as ext
-import fhirclient.r4models.codeableconcept as CC
-import fhirclient.r4models.coding as coding
-import fhirclient.r4models.fhirdate as D
+import fhirclient.models.organization as Organization
+import fhirclient.models.practitioner as Practitioner
+import fhirclient.models.practitionerrole as PractitionerRole
+import fhirclient.models.location as Location
+import fhirclient.models.endpoint as Endpoint
+import fhirclient.models.meta as Meta
+import fhirclient.models.fhirreference as ref
+import fhirclient.models.humanname as hn
+import fhirclient.models.address as add
+import fhirclient.models.contactpoint as cp
+import fhirclient.models.identifier as Identifier
+import fhirclient.models.extension as ext
+import fhirclient.models.codeableconcept as CC
+import fhirclient.models.coding as coding
+import fhirclient.models.fhirdate as D
 from json import dumps, loads
 from pandas import *
 from datetime import datetime, date
@@ -78,17 +79,17 @@ f_now = D.FHIRDate(str(date.today()))
 def main():
     
     parser = argparse.ArgumentParser(description="""NPPES Preprocessed DB to FHIR NDJSON for National Directory Import""")
-    parser.add_argument('dir_path', type=path_arg, help="Directory to write the NDJSON files")
+    parser.add_argument('dir_path', nargs='?', type=path_arg, default=OUTPUT_DIR, help="Directory to write the NDJSON files (optional)")
+    parser.add_argument('-i', '--individual', action='store_true', default=False, help='Write each resource to an individual file instead of combined NDJSON files (default: False)')
     #parser.add_argument("-s", "--states", nargs='+', help="States to include (practicing address only)", required=False)
-    
     
     args = parser.parse_args()
 
-    #dir_path = sys.argv[1]
     dir_path = args.dir_path
+    individual_files = args.individual
 
     #conn = sqlite3.connect('nppes_AllDCArea.db')
-    conn = sqlite3.connect('nppes.db')
+    conn = get_staging_connection()
     conn.row_factory = dict_factory
     organization_cur = conn.cursor()
     practitioner_cur = conn.cursor()
@@ -130,11 +131,16 @@ def main():
     loc_filename = file_name_prefix + "_Location.ndjson"
     ep_filename = file_name_prefix + "_EndPoint.ndjson"
 
-    # Export Location Resources
 
+    # Export Location Resources
     
     if(processLocations):
-        f = open(os.path.join(dir_path, loc_filename), "w")
+        if not individual_files:
+            f = open(os.path.join(dir_path, loc_filename), "w")
+        else:
+            location_dir = os.path.join(dir_path, "Location")
+            os.makedirs(location_dir, exist_ok=True)
+        
         sql = "SELECT l.*, o.name from Location as l INNER JOIN Entity_Location as el ON l.id = el.location_id INNER JOIN Organization as o ON o.id = el.entity_id UNION SELECT l.*, (p.last_name || ', ' || p.first_name) from Location as l INNER JOIN Entity_Location as el ON l.id = el.location_id INNER JOIN Practitioner as p ON p.id = el.entity_id GROUP BY l.id ORDER BY name;"
         location_cur.execute(sql)
         prev_name = ""
@@ -194,24 +200,34 @@ def main():
 
             location.extension = extensions
             
-            outputBuffer = outputBuffer + dumps(location.as_json()) + "\n"
-            if(currentLocItem % write_size == 0):
+            if individual_files:
+                with open(os.path.join(location_dir, f"Location-{row['id']}.json"), "w") as f:
+                    f.write(dumps(location.as_json(), indent=2))
+            else:
+                outputBuffer = outputBuffer + dumps(location.as_json()) + "\n"
+                if(currentLocItem % write_size == 0):
+                    f.write(outputBuffer)
+                    outputBuffer = ""
+                    print("Wrote", currentLocItem, "Location records to", loc_filename)
+        
+        if not individual_files:
+            if(outputBuffer != ""):
                 f.write(outputBuffer)
                 outputBuffer = ""
-                # TODO Write data to file
-                print("Wrote", currentLocItem, "Location records to", loc_filename)
-        
-        if(outputBuffer != ""):
-            f.write(outputBuffer)
-            outputBuffer = ""
-        f.close()
-        print("Wrote a total of", currentLocItem, "Location records to", loc_filename)
+            f.close()
+            print("Wrote a total of", currentLocItem, "Location records to", loc_filename)
+        else:
+            print(f"Wrote a total of {currentLocItem} Location records to individual files")
     
     # Export EndPoint Resources
     
     if(processEndpoints):
-        f = open(os.path.join(dir_path, ep_filename), "w")
-        
+        if not individual_files:
+            f = open(os.path.join(dir_path, ep_filename), "w")
+        else:
+            endpoint_dir = os.path.join(dir_path, "Endpoint")
+            os.makedirs(endpoint_dir, exist_ok=True)
+
         endpoint_cur.execute('SELECT * FROM Endpoint')
         for row in endpoint_cur:
             currentEPItem = currentEPItem + 1
@@ -259,24 +275,34 @@ def main():
 
             endpoint.extension = extensions
 
-            outputBuffer = outputBuffer + dumps(endpoint.as_json()) + "\n"
-            if(currentEPItem % write_size == 0):
+            if individual_files:
+                with open(os.path.join(endpoint_dir, f"Endpoint-{row['id']}.json"), "w") as f:
+                    f.write(dumps(endpoint.as_json(), indent=2))
+            else:
+                outputBuffer = outputBuffer + dumps(endpoint.as_json()) + "\n"
+                if(currentEPItem % write_size == 0):
+                    f.write(outputBuffer)
+                    outputBuffer = ""
+                    print("Wrote", currentEPItem, "Endpoint records to", ep_filename)
+
+        if not individual_files:
+            if(outputBuffer != ""):
                 f.write(outputBuffer)
                 outputBuffer = ""
-                # TODO Write data to file
-                print("Wrote", currentEPItem, "Endpoint records to", ep_filename)
-        if(outputBuffer != ""):
-            f.write(outputBuffer)
-            outputBuffer = ""
-
-        f.close()
-        print("Wrote a total of", currentEPItem, "Endpoint records to", ep_filename)
+            f.close()
+            print(f"Wrote a total of {currentEPItem} Endpoint records to {ep_filename}")
+        else:
+            print(f"Wrote a total of {currentEPItem} Endpoint records to individual files")
 
     # Export Organization Resources
     
     if(processOrganizations):
-        f = open(os.path.join(dir_path, org_filename), "w")
-        
+        if not individual_files:
+            f = open(os.path.join(dir_path, org_filename), "w")
+        else:
+            practitioner_dir = os.path.join(dir_path, "Organization")
+            os.makedirs(practitioner_dir, exist_ok=True)
+
         organization_cur.execute('SELECT * FROM Organization')
         for row in organization_cur:
             currentOrgItem = currentOrgItem + 1
@@ -293,7 +319,7 @@ def main():
             extensions.append(verification_status)
 
             # TODO, CONFORMANCE VERIFY Identifier Status extension is required
-            organization.identifier = [id.Identifier(jsondict=loads('{"use": "official", "system": "http://hl7.org/fhir/sid/us-npi", "value": "' + row['npi'] + '"}'))]
+            organization.identifier = [Identifier.Identifier(jsondict=loads('{"use": "official", "system": "http://hl7.org/fhir/sid/us-npi", "value": "' + row['npi'] + '"}'))]
             identifier_status = ext.Extension()
             identifier_status.url = URL_IDENTIFIERSTATUS
             identifier_status.valueCode =  "active"
@@ -340,26 +366,35 @@ def main():
             if(len(endpoint_list) > 0):
                 organization.endpoint = endpoint_list
 
-
-
-            outputBuffer = outputBuffer + dumps(organization.as_json()) + "\n"
-            if(currentOrgItem % write_size == 0):
+            
+            if individual_files:
+                with open(os.path.join(practitioner_dir, f"Organization-{row['id']}.json"), "w") as f:
+                    f.write(dumps(organization.as_json(), indent=2))
+            else:
+                outputBuffer = outputBuffer + dumps(organization.as_json()) + "\n"
+                if(currentOrgItem % write_size == 0):
+                    f.write(outputBuffer)
+                    outputBuffer = ""
+                    print("Wrote", currentOrgItem, "Organization records to", org_filename)
+        
+        if not individual_files:
+            if(outputBuffer != ""):
                 f.write(outputBuffer)
                 outputBuffer = ""
-                # TODO Write data to file
-                print("Wrote", currentOrgItem, "Organization records to", org_filename)
-        
-        if(outputBuffer != ""):
-            f.write(outputBuffer)
-            outputBuffer = ""
-        f.close()
-        print("Wrote a total of", currentOrgItem, "Organization records to", org_filename)
+            f.close()
+            print(f"Wrote a total of {currentOrgItem} Organization records to {org_filename}")
+        else:
+            print(f"Wrote a total of {currentOrgItem} Organization records to individual files")
 
 
     # Export Practitioner Resources
     
     if(processPractitioners):
-        f = open(os.path.join(dir_path, pract_filename), "w")
+        if not individual_files:
+            f = open(os.path.join(dir_path, pract_filename), "w")
+        else:
+            practitioner_dir = os.path.join(dir_path, "Practitioner")
+            os.makedirs(practitioner_dir, exist_ok=True)
         
         practitioner_cur.execute('SELECT * FROM Practitioner')
         for row in practitioner_cur:
@@ -377,7 +412,7 @@ def main():
             extensions.append(verification_status)
 
             # TODO, CONFORMANCE VERIFY Identifier Status extension is required
-            practitioner.identifier = [id.Identifier(jsondict=loads('{"use": "official", "system": "http://hl7.org/fhir/sid/us-npi", "value": "' + row['npi'] + '"}')), Identifier.Identifier(jsondict=loads('{"use": "official", "system": "http://hl7.org/fhir/sid/us-npi", "value": "' + row['npi'] + '"}')), getFHIRIDAsBusinessID(row['id'], 'Practitioner')]
+            practitioner.identifier = [Identifier.Identifier(jsondict=loads('{"use": "official", "system": "http://hl7.org/fhir/sid/us-npi", "value": "' + row['npi'] + '"}')), Identifier.Identifier(jsondict=loads('{"use": "official", "system": "http://hl7.org/fhir/sid/us-npi", "value": "' + row['npi'] + '"}')), getFHIRIDAsBusinessID(row['id'], 'Practitioner')]
             
             identifier_status = ext.Extension()
             identifier_status.url = URL_IDENTIFIERSTATUS
@@ -413,25 +448,33 @@ def main():
 
             practitioner.extension = extensions
 
-
-
-            outputBuffer = outputBuffer + dumps(practitioner.as_json()) + "\n"
-            if(currentPractItem % write_size == 0):
+            if individual_files:
+                with open(os.path.join(practitioner_dir, f"Practitioner-{row['id']}.json"), "w") as f:
+                    f.write(dumps(practitioner.as_json()))
+            else:
+                outputBuffer = outputBuffer + dumps(practitioner.as_json()) + "\n"
+                if(currentPractItem % write_size == 0):
+                    f.write(outputBuffer)
+                    outputBuffer = ""
+                    print("Wrote ", currentPractItem, "Practitioner records to", pract_filename)
+        
+        if not individual_files:
+            if(outputBuffer != ""):
                 f.write(outputBuffer)
                 outputBuffer = ""
-                # TODO Write data to file
-                print("Wrote ", currentPractItem, "Practitioner records to", pract_filename)
-        
-        if(outputBuffer != ""):
-            f.write(outputBuffer)
-            outputBuffer = ""
-        f.close()
-        print("Wrote a total of", currentPractItem, "Practitioner records to", pract_filename)
+            f.close()
+            print(f"Wrote a total of {currentPractItem} Practitioner records to {pract_filename}")
+        else:
+            print(f"Wrote a total of {currentPractItem} Practitioner records to individual files")
 
 
     if(processPractitionerRoles):
-        f = open(os.path.join(dir_path, practrol_filename), "w")
-        
+        if not individual_files:
+            f = open(os.path.join(dir_path, practrol_filename), "w")
+        else:
+            practrole_dir = os.path.join(dir_path, "PractitionerRole")
+            os.makedirs(practrole_dir, exist_ok=True)
+
         practitioner_cur.execute('SELECT * FROM PractitionerRole')
         for row in practitioner_cur:
             currentPractRolItem = currentPractRolItem + 1
@@ -512,19 +555,24 @@ def main():
             if(len(endpoint_list) > 0):
                 practitionerrole.endpoint = endpoint_list
 
-
-            outputBuffer = outputBuffer + dumps(practitionerrole.as_json()) + "\n"
-            if(currentPractRolItem % write_size == 0):
+            if individual_files:
+                with open(os.path.join(practrole_dir, f"PractitionerRole-{row['id']}.json"), "w") as f:
+                    f.write(dumps(practitionerrole.as_json()))
+            else:
+                outputBuffer = outputBuffer + dumps(practitionerrole.as_json()) + "\n"
+                if(currentPractRolItem % write_size == 0):
+                    f.write(outputBuffer)
+                    outputBuffer = ""
+                    print("Wrote", currentPractRolItem, "PractitionerRole records to", practrol_filename)
+        
+        if not individual_files:
+            if(outputBuffer != ""):
                 f.write(outputBuffer)
                 outputBuffer = ""
-                # TODO Write data to file
-                print("Wrote", currentPractRolItem, "PractitionerRole records to", practrol_filename)
-        
-        if(outputBuffer != ""):
-            f.write(outputBuffer)
-            outputBuffer = ""
-        f.close()
-        print("Wrote a total of", currentPractRolItem, "PractitionerRole records to", practrol_filename)
+            f.close()
+            print(f"Wrote a total of {currentPractRolItem} PractitionerRole records to {practrol_filename}")
+        else:
+            print(f"Wrote a total of {currentPractRolItem} PractitionerRole records to individual files")
 
 def getFHIRIDAsBusinessID(id, type):
 

@@ -29,26 +29,25 @@ from os import path
 #import validators
 from nameparser import HumanName
 import phonenumbers
-#import fhirclient.r4models.capabilitystatement as CS
-import fhirclient.r4models.organization as Organization
-import fhirclient.r4models.practitioner as Practitioner
-import fhirclient.r4models.endpoint as Endpoint
-import fhirclient.r4models.humanname as hn
-import fhirclient.r4models.address as add
-import fhirclient.r4models.contactpoint as cp
-import fhirclient.r4models.identifier as id
-import fhirclient.r4models.extension as ext
-import fhirclient.r4models.codeableconcept as CC
-import fhirclient.r4models.coding as coding
-import fhirclient.r4models.fhirdate as D
-#import fhirclient.r4models.extension as X
-#import fhirclient.r4models.contactdetail as CD
-#import fhirclient.r4models.narrative as N
-#import fhirclient.r4models.bundle as B
+import fhirclient.models.organization as Organization
+import fhirclient.models.practitioner as Practitioner
+import fhirclient.models.endpoint as Endpoint
+import fhirclient.models.humanname as hn
+import fhirclient.models.address as add
+import fhirclient.models.contactpoint as cp
+import fhirclient.models.identifier as id
+import fhirclient.models.extension as ext
+import fhirclient.models.codeableconcept as CC
+import fhirclient.models.coding as coding
+import fhirclient.models.fhirdate as D
+# import fhirclient.models.extension as X
+# import fhirclient.models.contactdetail as CD
+# import fhirclient.models.narrative as N
+# import fhirclient.models.bundle as B
 import re 
 
 import tarfile
-# import fhirclient.r4models.narrative as N
+# import fhirclient.models.narrative as N
 from json import dumps, loads
 #from requests import post
 #from pathlib import Path
@@ -60,7 +59,7 @@ from datetime import datetime, date
 
 
 
-import sqlite3
+from shared.db import get_staging_connection
 import uuid
 
 
@@ -155,14 +154,13 @@ def main():
 
 
     #Load FHIR Endpoint - temp code
-    if(False):
+    if False:
         commit_size = 10000
         currentItem = 0
         totalItems = 0
-        conn = sqlite3.connect('nppes.db')
-        
-        cur = conn.cursor()
+        conn = get_staging_connection()
 
+        cur = conn.cursor()
 
         cur.execute("DROP TABLE IF EXISTS FHIR_Endpoint")
         # Creating Location table
@@ -180,8 +178,6 @@ def main():
         index = """CREATE INDEX idx_fhir_endpoints_source
                     ON FHIR_Endpoint (source);"""
         cur.execute(index)
-
-
 
         for data in df:
             # loop through each row in the page

@@ -1,33 +1,30 @@
 
 import sys
 import os.path
-import glob
 import time
-import errno
 import argparse
 
 from urllib.parse import urlparse
 import json
-from json import dumps, loads
-from requests import post, get, delete
-import sqlite3
+from json import loads
+from requests import get
 from pandas import *
 import uuid
-from nameparser import HumanName
 
 from fhirclient import client
-import fhirclient.r4models.bundle as bundle
-import fhirclient.r4models.capabilitystatement as CS
-import fhirclient.r4models.organization as Organization
-import fhirclient.r4models.endpoint as Endpoint
-import fhirclient.r4models.consent as consent
-import fhirclient.r4models.meta as meta
-import fhirclient.r4models.identifier as id
-import fhirclient.r4models.extension as ext
-import fhirclient.r4models.codeableconcept as CC
-import fhirclient.r4models.contactpoint as ContactPoint
-import fhirclient.r4models.coding as coding
-import fhirclient.r4models.fhirreference as ref
+import fhirclient.models.capabilitystatement as CS
+import fhirclient.models.organization as Organization
+import fhirclient.models.endpoint as Endpoint
+import fhirclient.models.consent as consent
+import fhirclient.models.meta as meta
+import fhirclient.models.identifier as id
+import fhirclient.models.extension as ext
+import fhirclient.models.codeableconcept as CC
+import fhirclient.models.contactpoint as ContactPoint
+import fhirclient.models.coding as coding
+import fhirclient.models.fhirreference as ref
+
+from shared.config import OUTPUT_DIR
 
 # TODO meta.profile
 # Finish Endpoint extensions like use case and proxy
@@ -119,7 +116,7 @@ def main():
             if(endpoint is not None):
                 # write to server?
                 endpoints.append(endpoint)
-                f = open("output/Endpoint" + endpoint.id + ".json", "w")
+                f = open(f"{OUTPUT_DIR}/Endpoint{endpoint.id}.json", "w")
                 f.write(json.dumps(endpoint.as_json()))
                 f.close()
                 if(fhirClient):
@@ -172,7 +169,7 @@ def main():
                 print(f"Unable to create/update Connectathon Organization Usage Restriction Consent, id: {connectationConsent.id}")
         
         #Endpoint.Endpoint.update
-        f = open("output/Consent.json", "w")
+        f = open(f"{OUTPUT_DIR}/Consent.json", "w")
         f.write(json.dumps(connectationConsent.as_json()))
         f.close()
         #connectationConsent.update(fhirClient.server)
@@ -221,8 +218,8 @@ def main():
             endpoint_ref.display = endpoint.identifier[0].value
             #print(endpoint_ref.display)
             connectathonOrg.endpoint.append(endpoint_ref)
-        
-        f = open("output/Org.json", "w")
+
+        f = open(f"{OUTPUT_DIR}/Org.json", "w")
         f.write(json.dumps(connectathonOrg.as_json()))
         f.close()
 

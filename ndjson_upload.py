@@ -18,20 +18,42 @@ import uuid
 from nameparser import HumanName
 
 from fhirclient import client
-import fhirclient.r4models.bundle as bundle
-import fhirclient.r4models.capabilitystatement as CS
-import fhirclient.r4models.organization as Organization
-import fhirclient.r4models.endpoint as Endpoint
-import fhirclient.r4models.consent as consent
-import fhirclient.r4models.meta as meta
-import fhirclient.r4models.identifier as id
-import fhirclient.r4models.extension as ext
-import fhirclient.r4models.codeableconcept as CC
-import fhirclient.r4models.contactpoint as ContactPoint
-import fhirclient.r4models.coding as coding
-import fhirclient.r4models.fhirreference as ref
-import fhirclient.r4models.operationoutcome as OperationOutcome
+import fhirclient.models.bundle as bundle
+import fhirclient.models.capabilitystatement as CS
+import fhirclient.models.organization as Organization
+import fhirclient.models.endpoint as Endpoint
+import fhirclient.models.consent as consent
+import fhirclient.models.meta as meta
+import fhirclient.models.identifier as id
+import fhirclient.models.extension as ext
+import fhirclient.models.codeableconcept as CC
+import fhirclient.models.contactpoint as ContactPoint
+import fhirclient.models.coding as coding
+import fhirclient.models.fhirreference as ref
+import fhirclient.models.operationoutcome as OperationOutcome
 
+
+def get_json_files(directory) -> list[str]:
+    """
+    Recursively find all JSON and NDJSON files in the given directory.
+    
+    Args:
+        directory (str): The directory path to search
+        
+    Returns:
+        list: A list of file paths for all JSON and NDJSON files found
+    """
+    json_files = []
+    
+    # Walk through all subdirectories
+    for root, _, files in os.walk(directory):
+        for file in files:
+            if file.lower().endswith(('.json', '.ndjson')):
+                json_files.append(os.path.join(root, file))
+    
+    # Sort the files for consistent processing order
+    json_files.sort()
+    return json_files
 
 
 def main():
@@ -44,11 +66,13 @@ def main():
 
     parser = argparse.ArgumentParser(description="""Update FHIR Server with data From ndjson file""")
     parser.add_argument("-s", "--server", type=fhir_url, help="Server URL to make changes to")
-    parser.add_argument("-f", "--file", type=file_path, help="NDJson File")
-    group = parser.add_mutually_exclusive_group(required=False)
-    group.add_argument("-u", "--upload", help="Upload without validating", action='store_true')
-    group.add_argument("-v", "--valid_upload", help="Upload after validating with no errors", action='store_true')
-    group.add_argument("-d", "--delete", help="Delete Connectathon Resources from the National Directory FHIR Server", action='store_true')
+    input_group = parser.add_mutually_exclusive_group(required=True)
+    input_group.add_argument("-f", "--file", type=file_path, help="[ND]JSON File")
+    input_group.add_argument("-d", "--directory", type=dir_path, help="Directory containing [ND]JSON Files")
+    action_group = parser.add_mutually_exclusive_group(required=False)
+    action_group.add_argument("-u", "--upload", help="Upload without validating", action='store_true')
+    action_group.add_argument("-v", "--valid_upload", help="Upload after validating with no errors", action='store_true')
+    action_group.add_argument("--delete", help="Delete Connectathon Resources from the National Directory FHIR Server", action='store_true')
     # TODO Add silent mode
     # Add create after validate without errors
     # Add support for wildcards (multiple files)
@@ -73,16 +97,45 @@ def main():
     #client.FHIRClient(settings=settings)
     ### Load NPI
     start = time.time()
-    line_count = 0
 
-    # TODO more efficient file processing (one line read at a time is inefficient)
-    with open(f'{args.file}', 'r', encoding='utf-8-sig') as f:
-        for line in f:
-            if(len(line) > 10):
-                process_line(args, line)
-                line_count = line_count + 1
-                if(line_count % 5 == 0):
-                    print("Processed line ", line_count)
+
+    line_count = 0
+    files_to_process = []
+
+    # Determine which files to process
+    if args.file:
+        # Single file processing
+        files_to_process = [args.file]
+        print("Processing file:", args.file)
+    elif args.directory:
+        # Directory processing - recursively find all JSON and NDJSON files
+        print("Processing directory:", args.directory)
+        files_to_process = get_json_files(args.directory)
+        print(f"Found {len(files_to_process)} JSON/NDJSON files to process")
+
+    
+    # Process all files
+    for path in files_to_process:
+        if path.endswith('.ndjson'):
+            # Process NDJSON file line by line
+            with open(path, 'r', encoding='utf-8-sig') as f:
+                for line in f:
+                    if(len(line) > 10):
+                        process_resource(args, line)
+                        line_count = line_count + 1
+                        if(line_count % 5 == 0):
+                            print("Processed line ", line_count)
+        elif path.endswith('.json'):
+            # Process JSON file as a single resource
+            with open(path, 'r', encoding='utf-8-sig') as f:
+                content = f.read().strip()
+                if content:
+                    process_resource(args, content)
+                    line_count = line_count + 1
+                    if(line_count % 5 == 0):
+                        print("Processed line ", line_count)
+    
+    
     
     end = time.time()
     print("Execution time (in minutes)", (end - start)/60)
@@ -90,10 +143,10 @@ def main():
 
 
 
-def process_line(args, line):
+def process_resource(args, res):
     
     # TODO How to do dynamic datatyping
-    jsondict=json.loads(line)
+    jsondict=json.loads(res)
     if('resourceType' in jsondict):
         resourceType = jsondict['resourceType']
         id = ""
@@ -144,6 +197,12 @@ def file_path(string):
         return string
     else:
         raise argparse.ArgumentError(f'File: {string}, is not found')
+
+def dir_path(string):
+    if os.path.isdir(string):
+        return string
+    else:
+        raise argparse.ArgumentError(f'Directory: {string}, is not found')
 
 
 def fhir_url(arg):

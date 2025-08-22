@@ -11,6 +11,8 @@ from pandas import *
 import uuid
 from nameparser import HumanName
 
+from shared.db import get_staging_connection
+
 
 # TODO PR address set use to work
 # DONE? ENDPOINTS HAVE AFFILIATED ADDRESSES WHICH WILL NEED TO BE USED TO CONNECT THE ENDPOINTS TO THE RIGHT PRATITIONERROLES. Perhaps add location_id to Endpoints table and use that to link the two
@@ -93,7 +95,7 @@ def main():
     #df_cities.lookup()
     
     parser = argparse.ArgumentParser(description="""NPPES Preprocessing for National Directory Import""")
-    parser.add_argument('dir_path', type=path_arg, help="Directory containing files to import (maximum, one of each)")
+    parser.add_argument('dir_path', nargs='?', type=path_arg, help="Directory containing files to import (maximum, one of each). Default: sample_data", default="sample_data")
     parser.add_argument("-s", "--states", nargs='+', help="States to include (practicing address only)", required=False)
     
     
@@ -116,7 +118,9 @@ def main():
     #   1 = Practitioner
     #   2 = Organization
     #Paging variables
-    conn = sqlite3.connect('nppes.db')
+    
+
+    conn = get_staging_connection()
     #cur = conn.cursor()
     table_cur = conn.cursor()
     read_cur = conn.cursor()
