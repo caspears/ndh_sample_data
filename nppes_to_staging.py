@@ -41,7 +41,7 @@ ENDPOINT_TYPE_DICT = {"DIRECT": "direct-project",
 
 ENDPOINT_TYPE_DISPLAY_DICT = {"DIRECT": "Direct Project",
                       "FHIR": "HL7 FHIR",
-                      "CONNECT": "CONNECT - IHE XDS",
+                      "CONNECT": "XDS",
                       "REST": "REST (not FHIR)",
                       "SOAP": "SOAP",
                       "WEB": "Web",

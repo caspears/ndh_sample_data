@@ -1,7 +1,7 @@
 accepting_patients = {"nopt" : "Not Accepting",
-    "newpt" : "Accepting",
-    "existptonly" : "Accepting existing patients",
-    "existptfam" : "Accepting existing patients and their families"}
+    "newpt" : "Accepting new and existing patients",
+    "existptonly" : "Accepting existing patients only",
+    "existptfam" : "Accepting existing patients and their families only"}
 
 specialty_display = {"101200000X" : "Drama Therapist",
 	"101Y00000X" : "Counselor",
@@ -240,7 +240,7 @@ specialty_display = {"101200000X" : "Drama Therapist",
 	"207PP0204X" : "Pediatric Emergency Medicine (Emergency Medicine) Physician",
 	"207PS0010X" : "Sports Medicine (Emergency Medicine) Physician",
 	"207PT0002X" : "Medical Toxicology (Emergency Medicine) Physician",
-	"207Q00000X" : "Family Medicine",
+	"207Q00000X" : "Family Medicine Physician",
 	"207QA0000X" : "Adolescent Medicine (Family Medicine) Physician",
 	"207QA0401X" : "Addiction Medicine (Family Medicine) Physician",
 	"207QA0505X" : "Adult Medicine Physician",

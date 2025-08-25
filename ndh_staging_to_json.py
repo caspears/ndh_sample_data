@@ -48,7 +48,6 @@ import re
 import display_values
 
 # CONSTANTS
-URL_NDH_IDENTIFIER_STATUS = 'http://hl7.org/fhir/us/ndh/StructureDefinition/base-ext-identifier-status'
 URL_GEOLOCATION = 'http://hl7.org/fhir/StructureDefinition/geolocation'
 URL_NEWPATIENTS = 'http://hl7.org/fhir/us/ndh/StructureDefinition/base-ext-newpatients'
 URL_VERIFICATIONSTATUS = 'http://hl7.org/fhir/us/ndh/StructureDefinition/base-ext-verification-status'
@@ -56,8 +55,8 @@ URL_IDENTIFIERSTATUS = 'http://hl7.org/fhir/us/ndh/StructureDefinition/base-ext-
 
 ENDPOINT_TYPE_CS_DICT = {"direct-project": "http://terminology.hl7.org/CodeSystem/endpoint-connection-type",
                       "hl7-fhir-rest": "http://terminology.hl7.org/CodeSystem/endpoint-connection-type",
-                      "ihe-xds": "http://hl7.org/fhir/us/ndh/CodeSystem/EndpointConnectionTypeCS",
-                      "rest-non-fhir": "http://hl7.org/fhir/us/ndh/CodeSystem/EndpointConnectionTypeCS"}
+                      "ihe-xds": "https://profiles.ihe.net/ITI/mCSD/CodeSystem/MCSDEndpointTypes",
+                      "rest-non-fhir": "http://hl7.org/fhir/us/ndh/CodeSystem/NdhEndpointConnectionTypeCS"}
 
 email_regex = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,7}\b'
 
@@ -150,7 +149,7 @@ def main():
 
             location = Location.Location()
             extensions = []
-            location.meta = Meta.Meta(jsondict=loads('{"lastUpdated": "' + lastUpdated + '", "profile" : [ "http://hl7.org/fhir/us/ndh/StructureDefinition/ndh-ndapi-Location"]}'))
+            location.meta = Meta.Meta(jsondict=loads('{"lastUpdated": "' + lastUpdated + '", "profile" : [ "http://hl7.org/fhir/us/ndh/StructureDefinition/ndh-Location"]}'))
             location.id = row['id']
             location.identifier = [getFHIRIDAsBusinessID(row['id'], 'Location')]
             identifier_status = ext.Extension()
@@ -191,7 +190,7 @@ def main():
                 new_patients.url = URL_NEWPATIENTS
                 accepting_patients = ext.Extension()
                 accepting_patients.url = 'acceptingPatients'
-                accepting_patients.valueCodeableConcept =  CC.CodeableConcept(jsondict=loads('{"coding" : [{"system" : "http://hl7.org/fhir/us/ndh/CodeSystem/AcceptingPatientsCS", "code" : "' + list(display_values.accepting_patients.keys())[hash_val] + '", "display" : "' + display_values.accepting_patients[list(display_values.accepting_patients.keys())[hash_val]] + '"}]}'))
+                accepting_patients.valueCodeableConcept =  CC.CodeableConcept(jsondict=loads('{"coding" : [{"system" : "http://terminology.hl7.org/CodeSystem/accepting-patients", "code" : "' + list(display_values.accepting_patients.keys())[hash_val] + '", "display" : "' + display_values.accepting_patients[list(display_values.accepting_patients.keys())[hash_val]] + '"}]}'))
                 new_patients.extension = [accepting_patients]
 
                 extensions.append(new_patients)
@@ -233,7 +232,7 @@ def main():
             currentEPItem = currentEPItem + 1
             endpoint = Endpoint.Endpoint()
             extensions = []
-            endpoint.meta = Meta.Meta(jsondict=loads('{"lastUpdated": "' + lastUpdated + '", "profile" : [ "http://hl7.org/fhir/us/ndh/StructureDefinition/ndh-ndapi-Endpoint"]}'))
+            endpoint.meta = Meta.Meta(jsondict=loads('{"lastUpdated": "' + lastUpdated + '", "profile" : [ "http://hl7.org/fhir/us/ndh/StructureDefinition/ndh-Endpoint"]}'))
             endpoint.id = row['id']
             endpoint.identifier = [getFHIRIDAsBusinessID(row['id'], 'Endpoint')]
             identifier_status = ext.Extension()
@@ -309,7 +308,7 @@ def main():
 
             organization = Organization.Organization()
             extensions = []
-            organization.meta = Meta.Meta(jsondict=loads('{"lastUpdated": "' + lastUpdated + '", "profile" : [ "http://hl7.org/fhir/us/ndh/StructureDefinition/ndh-ndapi-Organization"]}'))
+            organization.meta = Meta.Meta(jsondict=loads('{"lastUpdated": "' + lastUpdated + '", "profile" : [ "http://hl7.org/fhir/us/ndh/StructureDefinition/ndh-Organization"]}'))
             organization.id = row['id']
             organization.identifier = [Identifier.Identifier(jsondict=loads('{"use": "official", "system": "http://hl7.org/fhir/sid/us-npi", "value": "' + row['npi'] + '"}')), getFHIRIDAsBusinessID(row['id'], 'Organization')]
             # NDH STU1 is planned to require verification status extension, default to not-required verification
@@ -326,7 +325,7 @@ def main():
             for ident in organization.identifier:
                 ident.extension = [identifier_status]
             organization.active = True
-            organization.type = [CC.CodeableConcept(jsondict=loads('{"coding" : [{"system" : "http://hl7.org/fhir/us/ndh/CodeSystem/OrgTypeCS", "code" : "prvgrp", "display": "Provider Group"}]}'))]
+            organization.type = [CC.CodeableConcept(jsondict=loads('{"coding" : [{"system" : "http://hl7.org/fhir/us/ndh/CodeSystem/NdhOrgTypeCS", "code" : "prvgrp", "display": "Provider Group"}]}'))]
 
             organization.name = row['name']
             # Load address and phone number from Location using Entity_Location
@@ -402,7 +401,7 @@ def main():
 
             practitioner = Practitioner.Practitioner()
             extensions = []
-            practitioner.meta = Meta.Meta(jsondict=loads('{"lastUpdated": "' + lastUpdated + '", "profile" : [ "http://hl7.org/fhir/us/ndh/StructureDefinition/ndh-ndapi-Practitioner"]}'))
+            practitioner.meta = Meta.Meta(jsondict=loads('{"lastUpdated": "' + lastUpdated + '", "profile" : [ "http://hl7.org/fhir/us/ndh/StructureDefinition/ndh-Practitioner"]}'))
             practitioner.id = row['id']
 
             # NDH STU1 is planned to require verification status extension, default to not-required verification
@@ -421,7 +420,7 @@ def main():
                 ident.extension = [identifier_status]
 
             practitioner.active = True
-            #practitioner.type = [CC.CodeableConcept(jsondict=loads('{"coding" : [{"system" : "http://hl7.org/fhir/us/ndh/CodeSystem/OrgTypeCS", "code" : "prvgrp", "display": "Provider Group"}]}'))]
+            #practitioner.type = [CC.CodeableConcept(jsondict=loads('{"coding" : [{"system" : "http://hl7.org/fhir/us/ndh/CodeSystem/NdhOrgTypeCS", "code" : "prvgrp", "display": "Provider Group"}]}'))]
 
             # Load Practitioner Endpoint extensions
             practitioner.name = getHumanNames(row)
@@ -481,7 +480,7 @@ def main():
 
             practitionerrole = PractitionerRole.PractitionerRole()
             extensions = []
-            practitionerrole.meta = Meta.Meta(jsondict=loads('{"lastUpdated": "' + lastUpdated + '", "profile" : [ "http://hl7.org/fhir/us/ndh/StructureDefinition/ndh-ndapi-PractitionerRole"]}'))
+            practitionerrole.meta = Meta.Meta(jsondict=loads('{"lastUpdated": "' + lastUpdated + '", "profile" : [ "http://hl7.org/fhir/us/ndh/StructureDefinition/ndh-PractitionerRole"]}'))
             practitionerrole.id = row['id']
             # Change to add FHIR ID as an identifier per CFRID-4
             practitionerrole.identifier = [getFHIRIDAsBusinessID(row['id'], 'PractitionerRole')]
@@ -504,7 +503,7 @@ def main():
             
             if(('organization_id' in row) and (row['organization_id'] != None) and (row['organization_id'] != "")):
                 practitionerrole.organization = ref.FHIRReference(jsondict=loads('{"reference": "Organization/' + row['organization_id'] + '", "type" : "Organization"}'))
-            #practitioner.type = [CC.CodeableConcept(jsondict=loads('{"coding" : [{"system" : "http://hl7.org/fhir/us/ndh/CodeSystem/OrgTypeCS", "code" : "prvgrp", "display": "Provider Group"}]}'))]
+            #practitioner.type = [CC.CodeableConcept(jsondict=loads('{"coding" : [{"system" : "http://hl7.org/fhir/us/ndh/CodeSystem/NdhOrgTypeCS", "code" : "prvgrp", "display": "Provider Group"}]}'))]
 
             specialties = []
             for key, val in row.items():
