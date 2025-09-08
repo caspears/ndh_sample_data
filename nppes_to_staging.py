@@ -1,15 +1,13 @@
-
 import sys
 import os.path
 import glob
 import time
 from datetime import datetime
-
 import argparse
-import sqlite3
-from pandas import *
 import uuid
+from pandas import *
 from nameparser import HumanName
+from thefuzz import fuzz
 
 from shared.db import get_staging_connection
 
@@ -71,9 +69,21 @@ endpointStart = 0
 
 
 print('....Loading City Geographical Coordinates.....')
-df_cities = read_csv("uscities.csv")
+df_cities = read_csv("uscities.csv", low_memory=False)
 #df['Courses'] = df['Courses'].apply(str.upper)
-df_cities['city_ascii'] = df_cities['city_ascii'].apply(str.upper)
+# Normalize city/state and build a fast lookup mapping to avoid repeated DataFrame queries
+df_cities['city_ascii'] = df_cities['city_ascii'].astype(str).str.upper().str.strip()
+if 'state_id' in df_cities.columns:
+    df_cities['state_id'] = df_cities['state_id'].astype(str).str.upper().str.strip()
+
+# Precompute a dict mapping (CITY, STATE) -> (lat, lng)
+city_state_coords = {}
+for r in df_cities[['city_ascii', 'state_id', 'lat', 'lng']].itertuples(index=False):
+    # r -> (city_ascii, state_id, lat, lng)
+    key = (r[0], r[1])
+    # keep the first occurrence
+    if key not in city_state_coords:
+        city_state_coords[key] = (r[2], r[3])
 
 
 #TODO HAPI Load order Enpoint, Location, Organization, Practioner, PractionerRole
@@ -97,6 +107,8 @@ def main():
     parser = argparse.ArgumentParser(description="""NPPES Preprocessing for National Directory Import""")
     parser.add_argument('dir_path', nargs='?', type=path_arg, help="Directory containing files to import (maximum, one of each). Default: sample_data", default="sample_data")
     parser.add_argument("-s", "--states", nargs='+', help="States to include (practicing address only)", required=False)
+    parser.add_argument("-c", "--cities", nargs='+', help="Cities to include (practicing address only)", required=False)
+    parser.add_argument("-z", "--chunk-size", type=int, default=10000, help="Chunk size (number of rows) to use when reading CSVs (default: 10000)")
     
     
     args = parser.parse_args()
@@ -104,6 +116,7 @@ def main():
     #dir_path = sys.argv[1]
     dir_path = args.dir_path
     state_filter = args.states
+    city_filter = args.cities
     print(dir_path)
     print()
     
@@ -111,6 +124,8 @@ def main():
     print(f'....processing files in {dir_path} .....')
     if(state_filter):
         print(f'Including only the following states {state_filter}')
+    if(city_filter):
+        print(f'Including only the following cities {city_filter}')
     
     
     # npidata_pfile notes
@@ -141,8 +156,8 @@ def main():
     #print (sql)
     
     
-    page_size = 1000
-    commit_size = 10000
+    page_size = args.chunk_size
+    commit_size = page_size if page_size > 10000 else 10000
     currentLocItem = 0
     currentOrgItem = 0
     currentPractItem = 0
@@ -177,7 +192,7 @@ def main():
         
         print("Loading Location Data from", csv)
         if(processOrganizations):
-            pldf = read_csv(csv #, chunksize=page_size
+            pldf = read_csv(csv, low_memory=False #, chunksize=page_size
                         #header=None, 
                         #skiprows=[0, 10], #current_page * page_size,
                         #skiprows=range(1, current_page * page_size),
@@ -204,7 +219,7 @@ def main():
         if(len(files) > 0):
             csv = files[0]
             print("Loading Secondary Practice Location Data from", csv)
-            df = read_csv(csv, chunksize=page_size
+            df = read_csv(csv, chunksize=page_size, low_memory=False
                         #header=None, 
                         #skiprows=[0, 10], #current_page * page_size,
                         #skiprows=range(1, current_page * page_size),
@@ -225,8 +240,10 @@ def main():
                         currentLocItem = currentLocItem + 1
 
                         if(currentLocItem > locationStart):
-                            # Always process if not filtering on states, or if filtering on states, check if there is a physical location and if so, whether it is to be included.
-                            if((state_filter == None) or (str(getValue(row, 'Provider Secondary Practice Location Address - State Name')) in state_filter)):
+                            # Always process if not filtering, or if filtering, check if there is a physical location and if so, whether it is to be included.
+                            state_match = (state_filter == None) or (str(getValue(row, 'Provider Secondary Practice Location Address - State Name')) in state_filter)
+                            city_match = (city_filter == None) or (str(getValue(row, 'Provider Secondary Practice Location Address - City Name')).upper() in [city.upper() for city in city_filter] if city_filter else True)
+                            if(state_match and city_match):
                             #if(True):
                                 location = loadSecondaryLocation(row)
 
@@ -260,7 +277,6 @@ def main():
             print("Execution time (in minutes)", (end - start)/60)
 
 
-
     files = glob.glob(os.path.join(dir_path, "npidata_*.csv"))
     if(len(files) > 1):
         print("Only loading the first NPI file", files[0])
@@ -270,7 +286,7 @@ def main():
         
         print("Loading NPI Data from", csv)
         if(processOrganizations):
-            df = read_csv(csv, chunksize=page_size
+            df = read_csv(csv, chunksize=page_size, low_memory=False
                         #header=None, 
                         #skiprows=[0, 10], #current_page * page_size,
                         #skiprows=range(1, current_page * page_size),
@@ -294,20 +310,34 @@ def main():
 
                             if(currentOrgItem > organizationStart):
                                 secondary_locations = None
-                                # Get Secondary practice locations for the organization to see if one is in the state filter list
+                                # Get Secondary practice locations for the organization to see if one is in the state/city filter list
                                 if(row['NPI'] in secondaryLocationNPIs):
-                                    if(state_filter == None):
+                                    if(state_filter == None and city_filter == None):
                                         read_cur.execute('SELECT * FROM TEMP_Location WHERE npi = ?', (row['NPI'],))
                                     else:    
-                                        #sql="select * from TEMP_Location where npi = ? AND state in ({seq})".format(seq=','.join(['?']*len(state_filter)))
-                                        #cur.execute(sql, [[str(row['NPI'])] + state_filter])
-                                        sql="select * from TEMP_Location where npi = ? AND state in ({seq})".format(seq=','.join(['?']*len(state_filter)))
-                                        test = [[row['NPI']] + state_filter]
-                                        read_cur.execute(sql, [[row['NPI']] + state_filter][0])
+                                        # Build dynamic SQL based on available filters
+                                        conditions = []
+                                        params = [row['NPI']]
+                                        
+                                        if state_filter:
+                                            conditions.append("state in ({seq})".format(seq=','.join(['?']*len(state_filter))))
+                                            params.extend(state_filter)
+                                        
+                                        if city_filter:
+                                            # Convert cities to uppercase for comparison
+                                            upper_cities = [city.upper() for city in city_filter]
+                                            conditions.append("UPPER(city) in ({seq})".format(seq=','.join(['?']*len(upper_cities))))
+                                            params.extend(upper_cities)
+                                        
+                                        where_clause = " AND ".join(conditions)
+                                        sql = "SELECT * FROM TEMP_Location WHERE npi = ? AND ({})".format(where_clause)
+                                        read_cur.execute(sql, params)
                                     secondary_locations = read_cur.fetchall()
                                 
-                                # Always process if not filtering on states, or if filtering on states, check if there is a physical location and if so, whether it is to be included.
-                                if((state_filter == None) or (str(getValue(row, 'Provider Business Practice Location Address State Name')) in state_filter) or (str(getValue(row, 'Provider Business Mailing Address State Name')) in state_filter) or (secondary_locations!= None)):
+                                # Always process if not filtering, or if filtering, check if there is a physical location and if so, whether it is to be included.
+                                state_match = (state_filter == None) or (str(getValue(row, 'Provider Business Practice Location Address State Name')) in state_filter) or (str(getValue(row, 'Provider Business Mailing Address State Name')) in state_filter) or (secondary_locations!= None)
+                                city_match = (city_filter == None) or (str(getValue(row, 'Provider Business Practice Location Address City Name')).upper() in [city.upper() for city in city_filter] if city_filter else True) or (str(getValue(row, 'Provider Business Mailing Address City Name')).upper() in [city.upper() for city in city_filter] if city_filter else True) or (secondary_locations!= None)
+                                if(state_match and city_match):
                                     locations = loadLocations(row, secondary_locations)
                                     
                                     #if((state_filter == None) or (('physical' in locations) and (locations['physical']['state'] in state_filter))):
@@ -346,7 +376,7 @@ def main():
                                             if('physical' in locations):
                                                 #if(('mail' in locations) and (locations['mail'] == locations['physical'])):
                                                 if(('mail' in locations) and (equal_dicts(locations['mail'], locations['physical'], 'id') == False)):
-                                                    # set the key for the location for the organiztion record
+                                                    # set the key for the location for the organization record
                                                     #row['physical_location'] = locations['mail']['id']
 
                                                     entity_location = {}
@@ -361,7 +391,7 @@ def main():
                                                 else:
                                                     sql = sqlInsert(cur, "Location", locations['physical'])   
                                                     totalLocItem = totalLocItem + 1
-                                                    # set the key for the location for the organiztion record
+                                                    # set the key for the location for the organization record
                                                     row['physical_location'] = locations['physical']['id']
 
                                                     entity_location = {}
@@ -405,7 +435,7 @@ def main():
             print("Execution time (in minutes)", (end - start)/60)
 
         if(processPractitioners):
-            df = read_csv(csv, chunksize=page_size)
+            df = read_csv(csv, chunksize=page_size, low_memory=False)
 
             # TODO
             #    Can Practitioners exist in the file more than once (more than one with the same NPI)? Is this  a way to link a provider to more than one location/organization?
@@ -422,19 +452,33 @@ def main():
 
                             if(currentPractItem > practitionerStart):
                                 secondary_locations = None
-                                # Get Secondary practice locations for the organization to see if one is in the state filter list
+                                # Get Secondary practice locations for the practitioner to see if one is in the state/city filter list
                                 if(row['NPI'] in secondaryLocationNPIs):
-                                    if(state_filter == None):
+                                    if(state_filter == None and city_filter == None):
                                         read_cur.execute('SELECT * FROM TEMP_Location WHERE npi = ?', (row['NPI'],))
                                     else:    
-                                        #sql="select * from TEMP_Location where npi = ? AND state in ({seq})".format(seq=','.join(['?']*len(state_filter)))
-                                        #cur.execute(sql, [[str(row['NPI'])] + state_filter])
-                                        sql="select * from TEMP_Location where npi = ? AND state in ({seq})".format(seq=','.join(['?']*len(state_filter)))
-                                        test = [[row['NPI']] + state_filter]
-                                        read_cur.execute(sql, [[row['NPI']] + state_filter][0])
+                                        # Build dynamic SQL based on available filters
+                                        conditions = []
+                                        params = [row['NPI']]
+                                        
+                                        if state_filter:
+                                            conditions.append("state in ({seq})".format(seq=','.join(['?']*len(state_filter))))
+                                            params.extend(state_filter)
+                                        
+                                        if city_filter:
+                                            # Convert cities to uppercase for comparison
+                                            upper_cities = [city.upper() for city in city_filter]
+                                            conditions.append("UPPER(city) in ({seq})".format(seq=','.join(['?']*len(upper_cities))))
+                                            params.extend(upper_cities)
+                                        
+                                        where_clause = " AND ".join(conditions)
+                                        sql = "SELECT * FROM TEMP_Location WHERE npi = ? AND ({})".format(where_clause)
+                                        read_cur.execute(sql, params)
                                     secondary_locations = read_cur.fetchall()
-                                # Always process if not filtering on states, or if filtering on states, check if there is a physical location and if so, whether it is to be included.
-                                if((state_filter == None) or (str(getValue(row, 'Provider Business Practice Location Address State Name')) in state_filter) or (str(getValue(row, 'Provider Business Mailing Address State Name')) in state_filter)):
+                                # Always process if not filtering, or if filtering, check if there is a physical location and if so, whether it is to be included.
+                                state_match = (state_filter == None) or (str(getValue(row, 'Provider Business Practice Location Address State Name')) in state_filter) or (str(getValue(row, 'Provider Business Mailing Address State Name')) in state_filter)
+                                city_match = (city_filter == None) or (str(getValue(row, 'Provider Business Practice Location Address City Name')).upper() in [city.upper() for city in city_filter] if city_filter else True) or (str(getValue(row, 'Provider Business Mailing Address City Name')).upper() in [city.upper() for city in city_filter] if city_filter else True)
+                                if(state_match and city_match):
                                     locations = loadLocations(row, secondary_locations)
                                     
                                     #if((state_filter == None) or (('physical' in locations) and(locations['physical']['state'] in state_filter))):
@@ -540,7 +584,7 @@ def main():
                                                 else:
                                                     sql = sqlInsert(cur, "Location", locations['physical'])   
                                                     totalLocItem = totalLocItem + 1
-                                                    # set the key for the location for the organiztion record
+                                                    # set the key for the location for the organization record
                                                     row['physical_location'] = locations['physical']['id']
 
                                                     entity_location = {}
@@ -578,7 +622,7 @@ def main():
                                             sql = sqlInsert(cur, "Location", locations['mail'])
                                             totalLocItem = totalLocItem + 1
                                             
-                                            # set the key for the location for the organiztion record
+                                            # set the key for the location for the organization record
                                             row['mail_location'] = locations['mail']['id']
 
                                         # Currently only assigning PractitionerRole by physical location
@@ -640,7 +684,6 @@ def main():
             print("Loaded a total of", totalPractItem, "Practitioner records.")
             print("Loaded a total of", totalPractRoleItem, "PractitionerRole records.")
             print("Loaded a total of", totalPractOrgRoleItem, "PractitionerRole with Organization records.")
-            totalPractOrgRoleItem
             print("Execution time (in minutes)", (end - start)/60)
     ### TODO Load Other names
     ### TODO Load Other locations
@@ -653,7 +696,7 @@ def main():
         if(len(files) > 0):
             csv = files[0]
             print("Loading Location Data from", csv)
-            df = read_csv(csv, chunksize=page_size
+            df = read_csv(csv, chunksize=page_size, low_memory=False
                         #header=None, 
                         #skiprows=[0, 10], #current_page * page_size,
                         #skiprows=range(1, current_page * page_size),
@@ -687,17 +730,17 @@ def main():
                                 sql = sqlInsert(cur, "Location", location)
                                 totalLocItem = totalLocItem + 1
                                     
-                                    # set the key for the location for the organiztion record
+                                    # set the key for the location for the organization record
                                     row['mail_location'] = locations['mail']['id']
                                 if('physical' in locations):
                                     #if(('mail' in locations) and (locations['mail'] == locations['physical'])):
                                     if(('mail' in locations) and (equal_dicts(locations['mail'], locations['physical'], 'id') == False)):
-                                        # set the key for the location for the organiztion record
+                                        # set the key for the location for the organization record
                                         row['physical_location'] = locations['mail']['id']
                                     else:
                                         sql = sqlInsert(cur, "Location", locations['physical'])   
                                         totalLocItem = totalLocItem + 1
-                                        # set the key for the location for the organiztion record
+                                        # set the key for the location for the organization record
                                         row['physical_location'] = locations['physical']['id']
                                 
                                 organization = loadOrganization(row)
@@ -732,7 +775,7 @@ def main():
             csv = files[0]
             
             print("Loading Endpoint Data from", csv)
-            df = read_csv(csv, chunksize=page_size)
+            df = read_csv(csv, chunksize=page_size, low_memory=False)
             
             
             # Load Organizations in to DB
@@ -752,9 +795,9 @@ def main():
                             # multiple organizations may have the same address. In that case, they will be considered different location records. If de-dupe is necessary, that will have to be done in a post process.
                             if(len(endpoint) > 0):
                                 current_npi = None
-                                #Check to see if there is a state filter, and if there is check to make sure the NPI is in the database in order to add
+                                #Check to see if there is a state/city filter, and if there is check to make sure the NPI is in the database in order to add
                                 npi_found = False
-                                if(state_filter == None):
+                                if(state_filter == None and city_filter == None):
                                     npi_found = True
                                 else:
                                     read_cur.execute('SELECT npi FROM Organization WHERE npi = ?', (endpoint['npi'],))
@@ -1058,13 +1101,11 @@ def loadLocations(entity_data, secondary_location_records = None):
         mail_location['postal'] = getValue(entity_data, 'Provider Business Mailing Address Postal Code')
         mail_location['country'] = getValue(entity_data, 'Provider Business Mailing Address Country Code (If outside U.S.)')
 
-        # THis is not perfect seraching as the names are not always a perfect match, particularly because of formatting, but it can add a lot of geolocation extensions
-        #print("Searching...", address.city,address.state)
-        coordinates = df_cities.loc[(df_cities['city_ascii'] == mail_location['city']) & (df_cities['state_id'] == mail_location['state'])]
-        
-        if(coordinates.empty == False):
-            mail_location['latitude'] = df_cities.at[coordinates.index[0], 'lat']
-            mail_location['longitude'] = df_cities.at[coordinates.index[0], 'lng']
+        # This is not perfect searching as the names are not always a perfect match, particularly because of formatting, but it can add a lot of geolocation extensions
+        key = (str(mail_location['city']).upper().strip(), str(mail_location['state']).upper().strip())
+        coords = city_state_coords.get(key)
+        if coords:
+            mail_location['latitude'], mail_location['longitude'] = coords
 
         mail_location['phone'] = getValue(entity_data, 'Provider Business Practice Location Address Telephone Number')
         mail_location['fax'] = getValue(entity_data, 'Provider Business Practice Location Address Fax Number')
@@ -1082,13 +1123,11 @@ def loadLocations(entity_data, secondary_location_records = None):
         physical_location['postal'] = getValue(entity_data, 'Provider Business Practice Location Address Postal Code')
         physical_location['country'] = getValue(entity_data, 'Provider Business Practice Location Address Country Code (If outside U.S.)')
 
-        # THis is not perfect seraching as the names are not always a perfect match, particularly because of formatting, but it can add a lot of geolocation extensions
-        #print("Searching...", address.city,address.state)
-        coordinates = df_cities.loc[(df_cities['city_ascii'] == physical_location['city']) & (df_cities['state_id'] == physical_location['state'])]
-        
-        if(coordinates.empty == False):
-            physical_location['latitude'] = df_cities.at[coordinates.index[0], 'lat']
-            physical_location['longitude'] = df_cities.at[coordinates.index[0], 'lng']
+        # This is not perfect searching as the names are not always a perfect match, particularly because of formatting, but it can add a lot of geolocation extensions
+        key = (str(physical_location['city']).upper().strip(), str(physical_location['state']).upper().strip())
+        coords = city_state_coords.get(key)
+        if coords:
+            physical_location['latitude'], physical_location['longitude'] = coords
 
         physical_location['phone'] = getValue(entity_data, 'Provider Business Mailing Address Telephone Number')
         physical_location['fax'] = getValue(entity_data, 'Provider Business Mailing Address Fax Number')
@@ -1107,13 +1146,11 @@ def loadLocations(entity_data, secondary_location_records = None):
         physical_location['postal'] = getValue(entity_data, 'Affiliation Address Postal Code')
         physical_location['country'] = getValue(entity_data, 'Affiliation Address Country')
 
-        # THis is not perfect seraching as the names are not always a perfect match, particularly because of formatting, but it can add a lot of geolocation extensions
-        #print("Searching...", address.city,address.state)
-        coordinates = df_cities.loc[(df_cities['city_ascii'] == physical_location['city']) & (df_cities['state_id'] == physical_location['state'])]
-        
-        if(coordinates.empty == False):
-            physical_location['latitude'] = df_cities.at[coordinates.index[0], 'lat']
-            physical_location['longitude'] = df_cities.at[coordinates.index[0], 'lng']
+        # This is not perfect searching as the names are not always a perfect match, particularly because of formatting, but it can add a lot of geolocation extensions
+        key = (str(physical_location['city']).upper().strip(), str(physical_location['state']).upper().strip())
+        coords = city_state_coords.get(key)
+        if coords:
+            physical_location['latitude'], physical_location['longitude'] = coords
 
         physical_location['phone'] = getValue(entity_data, 'Provider Business Mailing Address Telephone Number')
         physical_location['fax'] = getValue(entity_data, 'Provider Business Mailing Address Fax Number')
@@ -1133,6 +1170,7 @@ def loadLocations(entity_data, secondary_location_records = None):
 
 def loadSecondaryLocation(data):
     location = {}
+    count = 0;
     if((getValue(data, 'Provider Secondary Practice Location Address- Address Line 1') != '') and (getValue(data, 'NPI') != '')):
         location['id'] = str(uuid.uuid4())
         location['npi'] = getValue(data, 'NPI').upper()
@@ -1143,13 +1181,11 @@ def loadSecondaryLocation(data):
         location['postal'] = getValue(data, 'Provider Secondary Practice Location Address - Postal Code').upper()
         location['country'] = getValue(data, 'Provider Secondary Practice Location Address - Country Code (If outside U.S.)').upper()
 
-        # THis is not perfect seraching as the names are not always a perfect match, particularly because of formatting, but it can add a lot of geolocation extensions
-        #print("Searching...", address.city,address.state)
-        coordinates = df_cities.loc[(df_cities['city_ascii'] == location['city']) & (df_cities['state_id'] == location['state'])]
-        
-        if(coordinates.empty == False):
-            location['latitude'] = df_cities.at[coordinates.index[0], 'lat']
-            location['longitude'] = df_cities.at[coordinates.index[0], 'lng']
+        # This is not perfect searching as the names are not always a perfect match, particularly because of formatting, but it can add a lot of geolocation extensions
+        key = (str(location['city']).upper().strip(), str(location['state']).upper().strip())
+        coords = city_state_coords.get(key)
+        if coords:
+            location['latitude'], location['longitude'] = coords
 
     location['phone'] = getValue(data, 'Provider Secondary Practice Location Address - Telephone Number')
     extension = getValue(data, 'Provider Secondary Practice Location Address - Telephone Extension')
@@ -1342,40 +1378,85 @@ def findPracticingLocations(read_cur, location_id):
 
     return found_locations
 
-def findLocation(read_cur, location):
-    location_id = None
-    sql = """SELECT id FROM Location WHERE first_line = ? AND second_line = ? AND city = ? AND state = ? AND postal = ? AND country = ? """
-    #sql = """SELECT id FROM Location WHERE city = "%s" """ % location['city']
-    #print(sql)
-    read_cur.execute(sql, (location['first_line'], location['second_line'], location['city'],location['state'], location['postal'], location['country'],))
-    row = read_cur.fetchone()
-    if(row != None):
-        location_id = row[0]
+def findLocation(read_cur, location, threshold=80):
+    """
+    Find a location with fuzzy matching on address fields.
+    Returns the location_id of the best match if similarity > threshold, else None.
+    """
+    # First, query locations in the same state and city for efficiency
+    sql = """SELECT id, first_line, second_line, postal FROM Location WHERE state = ? AND city = ?"""
+    read_cur.execute(sql, (location['state'], location['city']))
+    rows = read_cur.fetchall()
+    
+    best_match = None
+    best_score = 0
+    
+    for row in rows:
+        loc_id, db_first, db_second, db_postal = row
+        
+        # Combine address lines for comparison
+        query_address = f"{location['first_line']} {location['second_line']}".strip()
+        db_address = f"{db_first} {db_second}".strip()
+        
+        # Fuzzy match on address lines
+        address_score = fuzz.ratio(query_address.lower(), db_address.lower())
+        
+        # Optional: Fuzzy match on postal code
+        postal_score = fuzz.ratio(str(location['postal']), str(db_postal)) if location['postal'] and db_postal else 100
+        
+        # Overall score (weighted average)
+        overall_score = (address_score * 0.7) + (postal_score * 0.3)
+        
+        if overall_score > best_score:
+            best_score = overall_score
+            best_match = loc_id
+    
+    # Return match only if above threshold
+    if best_score >= threshold:
+        return best_match
+    return None
 
-    return location_id
-
-def findLocations(read_cur, location, npi = None):
+def findLocations(read_cur, location, npi=None, threshold=80):
+    """
+    Find locations with fuzzy matching on address fields.
+    Returns a list of location_ids that match above the threshold.
+    """
     location_ids = []
     
-
-    sql = """SELECT id FROM Location WHERE first_line = ? AND second_line = ? AND city = ? AND state = ? AND postal = ? AND country = ? """
-
-    #sql = """SELECT id FROM Location WHERE city = "%s" """ % location['city']
-    #print(sql)
-    read_cur.execute(sql, (location['first_line'], location['second_line'], location['city'],location['state'], location['postal'], location['country'],))
+    # First, query locations in the same state and city for efficiency
+    sql = """SELECT id, first_line, second_line, postal FROM Location WHERE state = ? AND city = ?"""
+    read_cur.execute(sql, (location['state'], location['city']))
     rows = read_cur.fetchall()
+    
     for row in rows:
-        if(npi != None):
-            # Filter to only find locations associated with the NPI.
-            #"SELECT * FROM Entity_Location el INNER JOIN Practitioner pract ON pract.id = el.entity_id WHERE el.location_id = ? AND pract.npi = ?"
-            read_cur.execute('SELECT * FROM Entity_Location el INNER JOIN Practitioner pract ON pract.id = el.entity_id WHERE el.location_id = ? AND pract.npi = ?', (row[0], npi,))
-            test = read_cur.fetchone()
-            if(test != None):
-                location_ids.append(row[0])
-            
-        else:
-            location_ids.append(row[0])
-
+        loc_id, db_first, db_second, db_postal = row
+        
+        # Combine address lines for comparison
+        query_address = f"{location['first_line']} {location['second_line']}".strip()
+        db_address = f"{db_first} {db_second}".strip()
+        
+        # Fuzzy match on address lines
+        address_score = fuzz.ratio(query_address.lower(), db_address.lower())
+        
+        # Optional: Fuzzy match on postal code
+        postal_score = fuzz.ratio(str(location['postal']), str(db_postal)) if location['postal'] and db_postal else 100
+        
+        # Overall score (weighted average)
+        overall_score = (address_score * 0.7) + (postal_score * 0.3)
+        
+        if overall_score >= threshold:
+            # Apply NPI filter if provided
+            if npi is not None:
+                read_cur.execute(
+                    'SELECT * FROM Entity_Location el INNER JOIN Practitioner pract ON pract.id = el.entity_id WHERE el.location_id = ? AND pract.npi = ?',
+                    (loc_id, npi)
+                )
+                test = read_cur.fetchone()
+                if test is not None:
+                    location_ids.append(loc_id)
+            else:
+                location_ids.append(loc_id)
+    
     return location_ids
     #, second_line, city, state, postal, country"""
 
@@ -1464,10 +1545,26 @@ def sqlInsert(write_cur, table, dict):
     return ret_val
 
 def getValue(data, title):
-    #if((title in data) and (data[title])):
-    if((str(title) in data) and (str(data[title]).upper() != 'NAN')):
-        return str(data[title])
-    else:
+    # Defensive getter: the calling code usually passes a pandas Series (row)
+    # but sometimes other types (dict, str, scalar) can be passed. Make this
+    # function tolerant to avoid AttributeError when indexing a plain string.
+    try:
+        if data is None:
+            return ""
+
+        # pandas Series is available from `from pandas import *` as Series
+        if isinstance(data, (Series, dict)):
+            if (str(title) in data) and (str(data[title]).upper() != 'NAN'):
+                return str(data[title])
+            return ""
+
+        # If it's already a string, return it unless it represents NaN
+        if isinstance(data, str):
+            return data if data.upper() != 'NAN' else ""
+
+        # Fallback for other scalar types
+        return str(data)
+    except Exception:
         return ""
     
 def equal_dicts(d1, d2, ignore_keys):
