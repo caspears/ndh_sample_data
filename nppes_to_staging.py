@@ -546,21 +546,28 @@ def main():
                                                             #create practitioner Role
                                                             #print("Found organization with ID:", locationInfo['org_id'])
                                                             row['organization_id'] = practicing_location['entity_id']
-                                                        row['pr_location_id'] = location['id']
-                                                        practitionerRole = loadPractitionerRole(row)
-                                                        if(len(practitionerRole) > 0):
-                                                            if(sqlInsert(write_cur, "PractitionerRole", practitionerRole)):
-                                                                totalPractOrgRoleItem = totalPractOrgRoleItem + 1
+                                                        # Ensure we use an existing Location ID if available
+                                                        pr_location_id = findLocation(read_cur, location)
+                                                        if not pr_location_id or len(pr_location_id) <= 10:
+                                                            if sqlInsert(write_cur, "Location", location):
+                                                                totalLocItem = totalLocItem + 1
+                                                            # After insert, re-query to get the actual committed Location ID
+                                                            pr_location_id = findLocation(read_cur, location)
+                                                        # Only proceed if pr_location_id is valid and exists in Location table
+                                                        if pr_location_id and len(pr_location_id) > 10:
+                                                            row['pr_location_id'] = pr_location_id
+                                                            practitionerRole = loadPractitionerRole(row)
+                                                            if(len(practitionerRole) > 0):
+                                                                if(sqlInsert(write_cur, "PractitionerRole", practitionerRole)):
+                                                                    totalPractOrgRoleItem = totalPractOrgRoleItem + 1
 
-                                                            entity_location = {}
-                                                            entity_location['id'] = str(uuid.uuid4())
-                                                            entity_location['location_id'] = location['id']
-                                                                
-                                                            entity_location['entity_id'] = practitionerRole['id']
-                                                            entity_location['entity_type'] = PRACTITIONER_ROLE_ENTITY_TYPE
-
-                                                            entity_location['location_type'] = LOCATION_TYPE[key.split("_")[0]]
-                                                            sqlInsert(write_cur, "Entity_Location", entity_location)
+                                                                entity_location = {}
+                                                                entity_location['id'] = str(uuid.uuid4())
+                                                                entity_location['location_id'] = pr_location_id
+                                                                entity_location['entity_id'] = practitionerRole['id']
+                                                                entity_location['entity_type'] = PRACTITIONER_ROLE_ENTITY_TYPE
+                                                                entity_location['location_type'] = LOCATION_TYPE[key.split("_")[0]]
+                                                                sqlInsert(write_cur, "Entity_Location", entity_location)
                                                     if('organization_id' in row):
                                                         del row['organization_id']     
 
@@ -1340,14 +1347,15 @@ def loadPractitionerRole(data):
 
 def loadEndpoint(data):
     endpoint = {}
+    endpoint_type = ENDPOINT_TYPE_DICT[getValue(data, 'Endpoint Type')]
+    if not endpoint_type:
+        return {}
     if(str(data['NPI']) != ''):
         endpoint['id'] = str(uuid.uuid4())
         endpoint['npi'] = getValue(data, 'NPI')
         endpoint['name'] = getValue(data, 'Endpoint Description')
-        endpoint_type = ENDPOINT_TYPE_DICT[getValue(data, 'Endpoint Type')]
-        if(endpoint_type != ''):
-            endpoint['connection_type'] = endpoint_type
-            endpoint['connection_type_description'] = ENDPOINT_TYPE_DISPLAY_DICT[getValue(data, 'Endpoint Type')]
+        endpoint['connection_type'] = endpoint_type
+        endpoint['connection_type_description'] = ENDPOINT_TYPE_DISPLAY_DICT[getValue(data, 'Endpoint Type')]
         endpoint['url'] = str(data['Endpoint'])
 
         return endpoint

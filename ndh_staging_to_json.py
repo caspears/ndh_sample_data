@@ -533,7 +533,7 @@ def main():
             #       otherwise use the Practitioner endpoints
             if(('location_id' in row) and (row['location_id'] != None) and (row['location_id'] != "")):
                 """SELECT id from Entity_Location WHERE entity_type = '4' AND location_id = ?"""
-                entity_location_cur.execute("SELECT id from Entity_Location WHERE entity_type = '4' AND location_id = ?", (row['location_id'],))
+                entity_location_cur.execute("SELECT entity_id as id from Entity_Location WHERE entity_type = '4' AND location_id = ?", (row['location_id'],))
                 endpoints = entity_location_cur.fetchall()
 
             if(len(endpoints) == 0):
